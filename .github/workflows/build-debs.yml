@@ -68,11 +68,13 @@ jobs:
                 libglib2.0-dev zlib1g-dev libusb-1.0-0-dev \
                 libboost-dev libboost-filesystem-dev libboost-system-dev libboost-thread-dev \
                 libfftw3-dev python3-dev libudev-dev \
-                qtbase5-dev libqt5svg5-dev \
-                checkinstall
+                qtbase5-dev libqt5svg5-dev
+
+              ARCH=$(dpkg --print-architecture)
+              PKG_ROOT=/tmp/pkg-root
 
               cd /src
-              mkdir -p build && cd build
+              mkdir -p builddir && cd builddir
 
               cmake ../ \
                 -DCMAKE_INSTALL_PREFIX=/usr \
@@ -80,36 +82,68 @@ jobs:
 
               make -j$(nproc)
 
-              # Pre-create dirs that checkinstall might miss
-              mkdir -p /usr/share/doc/${PKG_NAME}
-              mkdir -p /usr/share/DSView
-              mkdir -p /usr/share/applications
-              mkdir -p /usr/share/pixmaps
+              # Install into staging directory
+              make install DESTDIR=${PKG_ROOT}
 
-              checkinstall \
-                --type=debian \
-                --pkgname="${PKG_NAME}" \
-                --pkgversion="${PKG_VERSION}" \
-                --pkgrelease="${PKG_RELEASE}" \
-                --arch=$(dpkg --print-architecture) \
-                --pkglicense="GPL-3.0" \
-                --pkggroup="electronics" \
-                --maintainer="seb@penthertz.com" \
-                --provides="${PKG_NAME}" \
-                --requires="libqt5core5t64,libqt5gui5t64,libqt5widgets5t64,libqt5svg5,libusb-1.0-0,libfftw3-single3,libboost-filesystem1.83.0,libboost-system1.83.0,libboost-thread1.83.0,zlib1g" \
-                --nodoc \
-                --backup=no \
-                --deldoc=yes \
-                --deldesc=yes \
-                --delspec=yes \
-                --default \
-                --install=no \
-                make install
+              # Ensure standard directories exist
+              mkdir -p ${PKG_ROOT}/usr/share/applications
+              mkdir -p ${PKG_ROOT}/usr/share/pixmaps
+              mkdir -p ${PKG_ROOT}/usr/share/DSView
 
-              cp *.deb /output/
-              echo "Built package:"
-              ls -lh /output/*.deb
-              dpkg-deb --info /output/*.deb
+              # Copy .desktop and icon if present in source tree
+              if [ -f /src/DSView/DSView.desktop ]; then
+                cp /src/DSView/DSView.desktop ${PKG_ROOT}/usr/share/applications/ 2>/dev/null || true
+              fi
+              if [ -f /src/DSView/icons/logo.svg ]; then
+                cp /src/DSView/icons/logo.svg ${PKG_ROOT}/usr/share/pixmaps/dsview.svg 2>/dev/null || true
+              fi
+              if [ -f /src/DSView/icons/logo.png ]; then
+                cp /src/DSView/icons/logo.png ${PKG_ROOT}/usr/share/pixmaps/dsview.png 2>/dev/null || true
+              fi
+
+              # Build .deb with dpkg-deb
+              mkdir -p ${PKG_ROOT}/DEBIAN
+              INSTALLED_SIZE=$(du -sk ${PKG_ROOT} | cut -f1)
+
+              cat > ${PKG_ROOT}/DEBIAN/control << EOF
+          Package: ${PKG_NAME}
+          Version: ${PKG_VERSION}-${PKG_RELEASE}
+          Architecture: ${ARCH}
+          Maintainer: seb@penthertz.com
+          Installed-Size: ${INSTALLED_SIZE}
+          Depends: libqt5core5t64, libqt5gui5t64, libqt5widgets5t64, libqt5svg5, libusb-1.0-0, libfftw3-single3, libboost-filesystem1.83.0, libboost-system1.83.0, libboost-thread1.83.0, zlib1g, libglib2.0-0t64
+          Provides: dsview
+          Section: electronics
+          Priority: optional
+          Homepage: https://www.dreamsourcelab.com
+          Description: DSView - Multi-function instrument GUI
+           DSView is an open-source multi-function instrument GUI for
+           DreamSourceLab hardware including DSLogic logic analyzers,
+           DSCope oscilloscopes, and DSLogic protocol analyzers.
+          EOF
+
+              # Post-install: run ldconfig
+              cat > ${PKG_ROOT}/DEBIAN/postinst << "POSTINST"
+          #!/bin/bash
+          ldconfig
+          POSTINST
+              chmod 755 ${PKG_ROOT}/DEBIAN/postinst
+
+              # Post-remove: run ldconfig
+              cat > ${PKG_ROOT}/DEBIAN/postrm << "POSTRM"
+          #!/bin/bash
+          ldconfig
+          POSTRM
+              chmod 755 ${PKG_ROOT}/DEBIAN/postrm
+
+              DEB_FILE="/output/${PKG_NAME}_${PKG_VERSION}-${PKG_RELEASE}_${ARCH}.deb"
+              dpkg-deb --build ${PKG_ROOT} ${DEB_FILE}
+
+              echo "=== Built package ==="
+              ls -lh ${DEB_FILE}
+              dpkg-deb --info ${DEB_FILE}
+              echo "=== Package contents (first 50 lines) ==="
+              dpkg-deb --contents ${DEB_FILE} | head -50
             '
 
       - name: Upload artifact
