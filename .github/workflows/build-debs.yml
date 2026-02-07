@@ -82,15 +82,12 @@ jobs:
 
               make -j$(nproc)
 
-              # Install into staging directory
               make install DESTDIR=${PKG_ROOT}
 
-              # Ensure standard directories exist
               mkdir -p ${PKG_ROOT}/usr/share/applications
               mkdir -p ${PKG_ROOT}/usr/share/pixmaps
               mkdir -p ${PKG_ROOT}/usr/share/DSView
 
-              # Copy .desktop and icon if present in source tree
               if [ -f /src/DSView/DSView.desktop ]; then
                 cp /src/DSView/DSView.desktop ${PKG_ROOT}/usr/share/applications/ 2>/dev/null || true
               fi
@@ -101,7 +98,6 @@ jobs:
                 cp /src/DSView/icons/logo.png ${PKG_ROOT}/usr/share/pixmaps/dsview.png 2>/dev/null || true
               fi
 
-              # Build .deb with dpkg-deb
               mkdir -p ${PKG_ROOT}/DEBIAN
               INSTALLED_SIZE=$(du -sk ${PKG_ROOT} | cut -f1)
 
@@ -122,11 +118,9 @@ jobs:
            DSCope oscilloscopes, and DSLogic protocol analyzers.
           EOF
 
-              # Post-install: run ldconfig + compatibility symlink
               printf "#!/bin/bash\nset -e\nldconfig\nif [ -d /usr/share/libsigrokdecode4DSL ] && [ ! -e /usr/local/share/libsigrokdecode4DSL ]; then\n    mkdir -p /usr/local/share\n    ln -s /usr/share/libsigrokdecode4DSL /usr/local/share/libsigrokdecode4DSL\nfi\n" > ${PKG_ROOT}/DEBIAN/postinst
               chmod 755 ${PKG_ROOT}/DEBIAN/postinst
 
-              # Post-remove: run ldconfig + cleanup symlink
               printf "#!/bin/bash\nset -e\nldconfig\nif [ -L /usr/local/share/libsigrokdecode4DSL ]; then\n    rm -f /usr/local/share/libsigrokdecode4DSL\nfi\n" > ${PKG_ROOT}/DEBIAN/postrm
               chmod 755 ${PKG_ROOT}/DEBIAN/postrm
 
@@ -136,7 +130,6 @@ jobs:
               echo "=== Built package ==="
               ls -lh ${DEB_FILE}
               dpkg-deb --info ${DEB_FILE}
-              echo "=== Package contents (first 50 lines) ==="
               dpkg-deb --contents ${DEB_FILE} | head -50
             '
 
@@ -167,7 +160,7 @@ jobs:
           ls -lh debs/
           for f in debs/*.deb; do
             echo "--- $(basename $f) ---"
-            dpkg-deb --info "$f" | grep -E '(Package|Version|Architecture|Installed-Size|Depends)'
+            dpkg-deb --info "$f" | grep -E "(Package|Version|Architecture|Installed-Size|Depends)"
           done
 
       - name: Create GitHub Release
@@ -176,22 +169,7 @@ jobs:
         with:
           files: debs/*.deb
           generate_release_notes: true
-          body: |
-            ## DSView ${{ env.PKG_VERSION }}
-
-            Pre-built Debian packages for Ubuntu Noble (24.04).
-
-            ### Install
-```bash
-            wget <url-to-deb>
-            sudo dpkg -i dsview_*.deb
-            sudo apt-get install -f -y
-```
-
-            ### Architectures
-            - `amd64` - x86_64
-            - `arm64` - AArch64
-            - `riscv64` - RISC-V 64
+          body: "Pre-built DSView Debian packages for Ubuntu Noble (24.04). Architectures: amd64, arm64, riscv64."
 
       - name: Upload debs for manual dispatch
         if: github.event_name == 'workflow_dispatch'
