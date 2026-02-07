@@ -123,30 +123,11 @@ jobs:
           EOF
 
               # Post-install: run ldconfig + compatibility symlink
-              cat > ${PKG_ROOT}/DEBIAN/postinst << "POSTINST"
-#!/bin/bash
-set -e
-ldconfig
-
-# Compatibility symlink for plugins expecting /usr/local path
-if [ -d /usr/share/libsigrokdecode4DSL ] && [ ! -e /usr/local/share/libsigrokdecode4DSL ]; then
-    mkdir -p /usr/local/share
-    ln -s /usr/share/libsigrokdecode4DSL /usr/local/share/libsigrokdecode4DSL
-fi
-POSTINST
+              printf "#!/bin/bash\nset -e\nldconfig\nif [ -d /usr/share/libsigrokdecode4DSL ] && [ ! -e /usr/local/share/libsigrokdecode4DSL ]; then\n    mkdir -p /usr/local/share\n    ln -s /usr/share/libsigrokdecode4DSL /usr/local/share/libsigrokdecode4DSL\nfi\n" > ${PKG_ROOT}/DEBIAN/postinst
               chmod 755 ${PKG_ROOT}/DEBIAN/postinst
 
               # Post-remove: run ldconfig + cleanup symlink
-              cat > ${PKG_ROOT}/DEBIAN/postrm << "POSTRM"
-#!/bin/bash
-set -e
-ldconfig
-
-# Remove compatibility symlink if it is ours
-if [ -L /usr/local/share/libsigrokdecode4DSL ]; then
-    rm -f /usr/local/share/libsigrokdecode4DSL
-fi
-POSTRM
+              printf "#!/bin/bash\nset -e\nldconfig\nif [ -L /usr/local/share/libsigrokdecode4DSL ]; then\n    rm -f /usr/local/share/libsigrokdecode4DSL\nfi\n" > ${PKG_ROOT}/DEBIAN/postrm
               chmod 755 ${PKG_ROOT}/DEBIAN/postrm
 
               DEB_FILE="/output/${PKG_NAME}_${PKG_VERSION}-${PKG_RELEASE}_${ARCH}.deb"
