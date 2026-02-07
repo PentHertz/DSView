@@ -122,18 +122,31 @@ jobs:
            DSCope oscilloscopes, and DSLogic protocol analyzers.
           EOF
 
-              # Post-install: run ldconfig
+              # Post-install: run ldconfig + compatibility symlink
               cat > ${PKG_ROOT}/DEBIAN/postinst << "POSTINST"
-          #!/bin/bash
-          ldconfig
-          POSTINST
+#!/bin/bash
+set -e
+ldconfig
+
+# Compatibility symlink for plugins expecting /usr/local path
+if [ -d /usr/share/libsigrokdecode4DSL ] && [ ! -e /usr/local/share/libsigrokdecode4DSL ]; then
+    mkdir -p /usr/local/share
+    ln -s /usr/share/libsigrokdecode4DSL /usr/local/share/libsigrokdecode4DSL
+fi
+POSTINST
               chmod 755 ${PKG_ROOT}/DEBIAN/postinst
 
-              # Post-remove: run ldconfig
+              # Post-remove: run ldconfig + cleanup symlink
               cat > ${PKG_ROOT}/DEBIAN/postrm << "POSTRM"
-          #!/bin/bash
-          ldconfig
-          POSTRM
+#!/bin/bash
+set -e
+ldconfig
+
+# Remove compatibility symlink if it is ours
+if [ -L /usr/local/share/libsigrokdecode4DSL ]; then
+    rm -f /usr/local/share/libsigrokdecode4DSL
+fi
+POSTRM
               chmod 755 ${PKG_ROOT}/DEBIAN/postrm
 
               DEB_FILE="/output/${PKG_NAME}_${PKG_VERSION}-${PKG_RELEASE}_${ARCH}.deb"
@@ -188,11 +201,11 @@ jobs:
             Pre-built Debian packages for Ubuntu Noble (24.04).
 
             ### Install
-            ```bash
+```bash
             wget <url-to-deb>
             sudo dpkg -i dsview_*.deb
             sudo apt-get install -f -y
-            ```
+```
 
             ### Architectures
             - `amd64` - x86_64
