@@ -15,6 +15,9 @@ env:
   PKG_NAME: dsview
   PKG_VERSION: ${{ github.event.inputs.version || '1.3.3' }}
   PKG_RELEASE: 1
+  # Distro the packages are built for. The build runs inside this container
+  # image, so this - not the runner label - is what the .deb links against.
+  UBUNTU_CODENAME: resolute
 
 jobs:
   build:
@@ -59,12 +62,13 @@ jobs:
             -e PKG_VERSION="${{ env.PKG_VERSION }}" \
             -e PKG_RELEASE="${{ env.PKG_RELEASE }}" \
             -e DEBIAN_FRONTEND=noninteractive \
-            ubuntu:noble bash -c '
+            ubuntu:${{ env.UBUNTU_CODENAME }} bash -c '
               set -ex
 
               apt-get update
               apt-get install -y --no-install-recommends \
                 build-essential cmake pkg-config git ca-certificates \
+                dpkg-dev file \
                 libglib2.0-dev zlib1g-dev libusb-1.0-0-dev \
                 libboost-dev libboost-filesystem-dev libboost-system-dev libboost-thread-dev \
                 libfftw3-dev python3-dev libudev-dev \
@@ -101,6 +105,58 @@ jobs:
                 cp /src/DSView/icons/logo.png ${PKG_ROOT}/usr/share/pixmaps/dsview.png 2>/dev/null || true
               fi
 
+              ##############################################
+              # Derive runtime dependencies from the built binaries
+              #
+              # Do not hardcode the Depends list: library package names and
+              # SONAMEs move between Ubuntu releases, and a hand-written list
+              # drifts out of sync with what was actually linked. The previous
+              # list claimed libfftw3-single3 (DSView links the double-precision
+              # libfftw3-double3), named Boost packages that DSView does not
+              # link at all (it only uses header-only Boost), and omitted
+              # libpython entirely - so the package installed cleanly and then
+              # failed at launch on a missing libpython3.12.so.1.0.
+              #
+              # dpkg-shlibdeps reads the real ELF NEEDED entries and asks dpkg
+              # which package owns each one, so the dependencies always match
+              # the binary and follow the distro Python automatically.
+              ##############################################
+              cd ${PKG_ROOT}
+              mkdir -p debian
+              {
+                echo "Source: ${PKG_NAME}"
+                echo "Package: ${PKG_NAME}"
+                echo "Architecture: ${ARCH}"
+              } > debian/control
+
+              ELF_LIST=""
+              while IFS= read -r f; do
+                if file -b "$f" | grep -qE "ELF.*(executable|shared object)"; then
+                  ELF_LIST="${ELF_LIST} $f"
+                fi
+              done < <(find ${PKG_ROOT}/usr -type f \( -perm -u+x -o -name "*.so*" \))
+
+              if [ -z "${ELF_LIST}" ]; then
+                echo "ERROR: no ELF objects found in ${PKG_ROOT}" >&2
+                exit 1
+              fi
+
+              DEPENDS=$(dpkg-shlibdeps -O --ignore-missing-info -S${PKG_ROOT} ${ELF_LIST} 2>/dev/null | sed -e "s/^shlibs:Depends=//")
+
+              if [ -z "${DEPENDS}" ]; then
+                echo "ERROR: dpkg-shlibdeps produced no dependencies" >&2
+                exit 1
+              fi
+
+              # Runtime-only dependencies that leave no ELF NEEDED entry:
+              # libqt5svg5 is dlopened as a Qt imageformats plugin to render the
+              # SVG icons, and python3 provides the stdlib that the bundled
+              # libsigrokdecode4DSL protocol decoders import.
+              DEPENDS="${DEPENDS}, libqt5svg5, python3"
+
+              rm -rf debian
+              echo "Generated Depends: ${DEPENDS}"
+
               # Build .deb with dpkg-deb
               mkdir -p ${PKG_ROOT}/DEBIAN
               INSTALLED_SIZE=$(du -sk ${PKG_ROOT} | cut -f1)
@@ -111,7 +167,7 @@ jobs:
           Architecture: ${ARCH}
           Maintainer: seb@penthertz.com
           Installed-Size: ${INSTALLED_SIZE}
-          Depends: libqt5core5t64, libqt5gui5t64, libqt5widgets5t64, libqt5svg5, libusb-1.0-0, libfftw3-single3, libboost-filesystem1.83.0, libboost-system1.83.0, libboost-thread1.83.0, zlib1g, libglib2.0-0t64
+          Depends: ${DEPENDS}
           Provides: dsview
           Section: electronics
           Priority: optional
@@ -122,16 +178,22 @@ jobs:
            DSCope oscilloscopes, and DSLogic protocol analyzers.
           EOF
 
-              # Post-install: run ldconfig
+              # Post-install: ldconfig + udev reload
               cat > ${PKG_ROOT}/DEBIAN/postinst << "POSTINST"
           #!/bin/bash
+          set -e
           ldconfig
+          if command -v udevadm > /dev/null 2>&1; then
+            udevadm control --reload-rules 2>/dev/null || true
+            udevadm trigger 2>/dev/null || true
+          fi
           POSTINST
               chmod 755 ${PKG_ROOT}/DEBIAN/postinst
 
               # Post-remove: run ldconfig
               cat > ${PKG_ROOT}/DEBIAN/postrm << "POSTRM"
           #!/bin/bash
+          set -e
           ldconfig
           POSTRM
               chmod 755 ${PKG_ROOT}/DEBIAN/postrm
@@ -146,6 +208,52 @@ jobs:
               dpkg-deb --contents ${DEB_FILE} | head -50
             '
 
+      - name: Verify .deb installs and runs
+        if: matrix.arch == 'amd64'
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/output:/output \
+            -e DEBIAN_FRONTEND=noninteractive \
+            ubuntu:${{ env.UBUNTU_CODENAME }} bash -c '
+              set -ex
+              apt-get update
+
+              # Install the package the way a user would. apt has to resolve the
+              # generated Depends, so a wrong or missing dependency fails here
+              # rather than on the user machine.
+              apt-get install -y --no-install-recommends /output/*.deb
+
+              # A half-configured package means a dependency problem.
+              dpkg-query -W -f="\${Status}\n" dsview
+              dpkg-query -W -f="\${Status}" dsview | grep -q "install ok installed"
+
+              # Fail on any unresolved SONAME. This is the check that would have
+              # caught the missing libpython3.12.so.1.0 at build time: the old
+              # package installed cleanly and only broke when launched.
+              echo "--- ldd /usr/bin/DSView ---"
+              ldd /usr/bin/DSView
+              if ldd /usr/bin/DSView | grep "not found"; then
+                echo "ERROR: unresolved libraries in /usr/bin/DSView" >&2
+                exit 1
+              fi
+
+              # Actually launch it under the offscreen Qt platform plugin. It has
+              # no reason to exit on its own, so the expected result is the
+              # timeout killing it (exit 124).
+              rc=0
+              QT_QPA_PLATFORM=offscreen timeout 25 DSView > /tmp/dsview.log 2>&1 || rc=$?
+              cat /tmp/dsview.log
+              if [ "${rc}" != "124" ] && [ "${rc}" != "0" ]; then
+                echo "ERROR: DSView exited with ${rc}" >&2
+                exit 1
+              fi
+
+              # It must find its installed data directory, otherwise it aborts
+              # on startup with an assertion.
+              grep -q "GetAppDataDir" /tmp/dsview.log
+              echo "=== smoke test passed ==="
+            '
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -155,7 +263,7 @@ jobs:
 
   release:
     needs: build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
@@ -185,13 +293,16 @@ jobs:
           body: |
             ## DSView ${{ env.PKG_VERSION }}
 
-            Pre-built Debian packages for Ubuntu Noble (24.04).
+            Pre-built Debian packages for Ubuntu Resolute Raccoon (26.04).
+
+            Built against the Ubuntu 26.04 library stack (Qt 5.15.18, Python 3.14).
+            These packages will not install on Ubuntu 24.04 (noble), which ships
+            Python 3.12.
 
             ### Install
             ```bash
             wget <url-to-deb>
-            sudo dpkg -i dsview_*.deb
-            sudo apt-get install -f -y
+            sudo apt install ./dsview_*.deb
             ```
 
             ### Architectures
