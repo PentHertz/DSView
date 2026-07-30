@@ -21,18 +21,24 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-26.04
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
+          # amd64 and arm64 build natively on their own runners. Only riscv64
+          # still needs QEMU emulation, which is roughly an order of magnitude
+          # slower.
           - arch: amd64
+            runner: ubuntu-26.04
             platform: linux/amd64
             qemu: false
           - arch: arm64
+            runner: ubuntu-26.04-arm
             platform: linux/arm64
-            qemu: true
+            qemu: false
           - arch: riscv64
+            runner: ubuntu-26.04
             platform: linux/riscv64
             qemu: true
 
@@ -208,8 +214,11 @@ jobs:
               dpkg-deb --contents ${DEB_FILE} | head -50
             '
 
+      # Run the smoke test on every natively-built architecture. It is skipped
+      # only for the QEMU-emulated riscv64 build, where launching a Qt GUI under
+      # emulation is slow and prone to spurious failures.
       - name: Verify .deb installs and runs
-        if: matrix.arch == 'amd64'
+        if: ${{ !matrix.qemu }}
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/output:/output \

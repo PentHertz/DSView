@@ -19,7 +19,12 @@
 ## along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ##
 
-cmake_minimum_required(VERSION 2.8.6)
+# CMake 4 removed compatibility with CMake < 3.5, so a bare 2.8.6 minimum is a
+# hard error there. The <min>...<max> form keeps the project buildable by newer
+# CMake while capping the policy version: <max> stays below 3.30 on purpose, so
+# CMP0167 remains OLD and the FindBoost module (which sets the Boost_INCLUDE_DIRS
+# used below) is still available.
+cmake_minimum_required(VERSION 3.5...3.29)
 
 project(DSView)
 

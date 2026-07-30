@@ -19,7 +19,9 @@
 ## along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ##
 
-cmake_minimum_required(VERSION 2.8.6)
+# See the note in the top-level CMakeLists.txt: CMake 4 rejects a minimum below
+# 3.5, so use the <min>...<max> form with the policy version capped below 3.30.
+cmake_minimum_required(VERSION 3.5...3.29)
 
 include(FindPkgConfig)
 include(GNUInstallDirs)
